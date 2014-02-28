@@ -1,0 +1,112 @@
+#pragma once
+
+#include <vector>
+#include <mpi.h>
+
+namespace cm {
+
+  inline MPI_Datatype
+  infer_mpi_type( float * )
+  {
+    return MPI_FLOAT;
+  }
+
+  inline MPI_Datatype
+  infer_mpi_type( double * )
+  {
+    return MPI_DOUBLE;
+  }
+
+  template <typename T>
+  class Bin {
+
+   private:
+
+    int _target_rank;
+
+    MPI_Win _target_window;
+    MPI_Datatype _mpi_data_type;
+
+    std::vector<T> _update_data;
+    std::vector<long> _update_ijs;
+
+    inline void
+    clear()
+    {
+      _update_data.clear();
+      _update_ijs.clear();
+    }
+
+   public:
+
+    /**
+     * Initialize the Bin object for a given target
+     * \param target_rank Rank of the target
+     * \param target_window Window for target-local storage
+     */
+    Bin( int target_rank, MPI_Win target_window ) :
+      _target_rank(target_rank), _target_window(target_window)
+    {
+      _mpi_data_type = infer_mpi_type( _update_data.data() );
+    }
+
+    /**
+     * Current size of the bin (number of update elems not yet applied)
+     */
+    inline long
+    size()
+    {
+      return _update_data.size();
+    }
+
+    /**
+     * Add an elemental update to this bin
+     * \param data Elemental update (r.h.s. of +=)
+     * \param ij Linear index of element to be updated
+     */
+    inline void
+    append( T data, long ij )
+    {
+      _update_data.push_back( data );
+      _update_ijs.push_back( ij );
+    }
+
+    /**
+     * "Flush" this bin, by applying the locally cached updates to the target
+     * (which are thereafter discarded on this, the initiating side).
+     */
+    void
+    flush()
+    {
+      int *blocksize, *displacement;
+      MPI_Datatype update_type;
+ 
+      // initialize datatype for update indexing
+      blocksize    = new int [size()];
+      displacement = new int [size()];
+      for ( long i = 0; i < size(); i++ ) {
+        blocksize[i] = 1;
+        displacement[i] = _update_ijs[i];
+      }
+      MPI_Type_indexed( size(), blocksize, displacement, _mpi_data_type,
+                        &update_type );
+      MPI_Type_commit( &update_type );
+
+      // acquire the shared lock, apply the update, unlock
+      MPI_Win_lock( MPI_LOCK_SHARED, _target_rank, 0, _target_window );
+      MPI_Accumulate( _update_data.data(), size(), _mpi_data_type,
+                      _target_rank, 0, 1, update_type, MPI_SUM, _target_window );
+      MPI_Win_unlock( _target_rank, _target_window );
+
+      // clean up after the derived type
+      MPI_Type_free( &update_type );
+      delete [] blocksize;
+      delete [] displacement;
+
+      // clear the local buffers
+      clear();
+    }
+
+  };
+
+}
