@@ -176,7 +176,11 @@ namespace cm {
       assert( _m_local <= LLD );
 
       // allocate and zero storage
+#ifdef NO_MPI_ALLOC_MEM
       _local_ptr = new T[LLD * _n_local];
+#else
+      MPI_Alloc_mem( LLD * _n_local * sizeof(T), MPI_INFO_NULL, &_local_ptr );
+#endif
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
 
