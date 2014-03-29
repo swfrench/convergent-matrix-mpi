@@ -2,10 +2,16 @@
 
 #include <vector>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <cassert>
+
+#include <algorithm>
+
 #ifdef ENABLE_CONSISTENCY_CHECK
 #include <cmath>
 #endif
+
 #include <mpi.h>
 
 // LocalMatrix<T>
