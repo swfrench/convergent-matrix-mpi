@@ -93,7 +93,7 @@ namespace cm {
       MPI_Type_commit( &update_type );
 
       // acquire the shared lock, apply the update, unlock
-#ifdef NO_MPI_LOCK_EXCLUSIVE
+#ifdef USE_MPI_LOCK_SHARED
       MPI_Win_lock( MPI_LOCK_SHARED, _target_rank, 0, _target_window );
 #else
       MPI_Win_lock( MPI_LOCK_EXCLUSIVE, _target_rank, 0, _target_window );
