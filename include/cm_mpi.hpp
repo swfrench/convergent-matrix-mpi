@@ -22,6 +22,32 @@
 namespace cm {
 
   /**
+   * Wrapper for \c std::rand() for use in \c std::random_shuffle() (called in
+   * \c permute() below).
+   */
+  int
+  rgen( int n )
+  {
+    return std::rand() % n;
+  }
+
+  /**
+   * Apply a random permutation (in place) to the supplied array.
+   * \param xs Array of type \c int
+   * \param nx Length of array \c xs
+   *
+   * Seeds std::rand() in a manner that should be ok even if all threads hit
+   * \c permute() at nearly the same time.
+   */
+  void
+  permute( int *xs, int n )
+  {
+    unsigned seed = ( 1 + MYTHREAD ) * std::time( NULL );
+    std::srand( seed );
+    std::random_shuffle( xs, xs + n, rgen );
+  }
+
+  /**
    * MPI-based convergent matrix abstraction
    * \tparam T Matrix data type (e.g. float)
    * \tparam NPROW Number of rows in the distributed process grid
@@ -44,6 +70,7 @@ namespace cm {
     long _m_local, _n_local;
     int _mpi_rank, _mpi_size;
     int _bin_flush_threshold;
+    int *_bin_flush_order;
     T *_local_ptr;
     std::vector<Bin<T> *> _bins;
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -55,9 +82,11 @@ namespace cm {
     flush( int thresh = 0 )
     {
       // flush the bins
-      for ( int tid = 0; tid < _mpi_size; tid++ )
+      for ( int b = 0; b < _mpi_size; b++ ) {
+        int tid = _bin_flush_order[b];
         if ( _bins[tid]->size() > thresh )
           _bins[tid]->flush();
+      }
     }
 
     inline long
@@ -202,6 +231,12 @@ namespace cm {
       }
       MPI_Barrier( MPI_COMM_WORLD );
 
+      // set up random flushing order
+      _bin_flush_order = new int [_mpi_size];
+      for ( int tid = 0; tid < _mpi_size; tid++ )
+        _bin_flush_order[tid] = tid;
+      permute( _bin_flush_order, _mpi_size );
+
       // consistency check is off by default
 #ifdef ENABLE_CONSISTENCY_CHECK
       _consistency_mode = false;
@@ -213,6 +248,7 @@ namespace cm {
     {
       for ( int tid = 0; tid < _mpi_size; tid++ )
         delete _bins[tid];
+      delete [] _bin_flush_order;
     }
 
     /**
