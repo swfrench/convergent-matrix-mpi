@@ -48,7 +48,10 @@ namespace cm {
   void
   permute( int *xs, int n )
   {
-    unsigned seed = ( 1 + MYTHREAD ) * std::time( NULL );
+    int rank;
+    unsigned seed;
+    MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+    seed = ( 1 + rank ) * std::time( NULL );
     std::srand( seed );
     std::random_shuffle( xs, xs + n, rgen );
   }
