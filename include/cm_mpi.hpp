@@ -96,6 +96,10 @@ namespace cm {
         if ( _bins[tid]->size() > thresh )
           _bins[tid]->flush();
       }
+      for ( int b = 0; b < _mpi_size; b++ ) {
+        int tid = _bin_flush_order[b];
+        _bins[tid]->finish();
+      }
     }
 
     inline long
@@ -237,6 +241,13 @@ namespace cm {
                           &target_window );
         // add to bins
         _bins.push_back( new Bin<T>( tid, target_window ) );
+
+        // acquire shared lock
+#ifdef USE_NO_SHARED_ASSERTS
+        MPI_Win_lock( MPI_LOCK_SHARED, tid, 0, target_window );
+#else
+        MPI_Win_lock( MPI_LOCK_SHARED, tid, MPI_MODE_NOCHECK, target_window );
+#endif
       }
       MPI_Barrier( MPI_COMM_WORLD );
 
@@ -440,6 +451,12 @@ namespace cm {
     {
       // flush all non-empty bins (local task queue will be emptied)
       flush();
+
+      for ( int b = 0; b < _mpi_size; b++ ) {
+        int tid = _bin_flush_order[b];
+        MPI_Win win = _bins[tid]->target_window();
+        MPI_Win_unlock( tid, win );
+      }
 
       // synchronize
       MPI_Barrier( MPI_COMM_WORLD );

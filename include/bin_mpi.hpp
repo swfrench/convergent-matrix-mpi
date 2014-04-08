@@ -93,24 +93,31 @@ namespace cm {
       MPI_Type_commit( &update_type );
 
       // acquire the shared lock, apply the update, unlock
-#ifdef USE_MPI_LOCK_SHARED
-      MPI_Win_lock( MPI_LOCK_SHARED, _target_rank, 0, _target_window );
-#else
-      MPI_Win_lock( MPI_LOCK_EXCLUSIVE, _target_rank, 0, _target_window );
-#endif
       MPI_Accumulate( _update_data.data(), size(), _mpi_data_type,
                       _target_rank, 0, 1, update_type, MPI_SUM, _target_window );
-      MPI_Win_unlock( _target_rank, _target_window );
 
       // clean up after the derived type
       MPI_Type_free( &update_type );
       delete [] blocksize;
       delete [] displacement;
+    }
 
-      // clear the local buffers
+    void
+    finish()
+    {
+#ifdef USE_REMOTE_FLUSH
+      MPI_Win_flush( _target_rank, _target_window );
+#else
+      MPI_Win_flush_local( _target_rank, _target_window );
+#endif
       clear();
     }
 
+    MPI_Win
+    target_window() const
+    {
+      return _target_window;
+    }
   };
 
 }
