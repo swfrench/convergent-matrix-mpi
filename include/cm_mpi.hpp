@@ -225,19 +225,14 @@ namespace cm {
       // set flush threashold for bins
       _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
 
+      // initialize window
+      MPI_Win target_window;
+      MPI_Win_create( _local_ptr, LLD * _n_local * sizeof(T), sizeof(T),
+                      MPI_INFO_NULL, MPI_COMM_WORLD, &target_window );
+
       // set up bins
-      for ( int tid = 0; tid < _mpi_size; tid++ ) {
-        MPI_Win target_window;
-        // initialize window
-        if ( tid == _mpi_rank )
-          MPI_Win_create( _local_ptr, LLD * _n_local * sizeof(T), sizeof(T),
-                          MPI_INFO_NULL, MPI_COMM_WORLD, &target_window );
-        else
-          MPI_Win_create( NULL, 0, sizeof(T), MPI_INFO_NULL, MPI_COMM_WORLD,
-                          &target_window );
-        // add to bins
+      for ( int tid = 0; tid < _mpi_size; tid++ )
         _bins.push_back( new Bin<T>( tid, target_window ) );
-      }
       MPI_Barrier( MPI_COMM_WORLD );
 
       // set up random flushing order
