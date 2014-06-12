@@ -5,37 +5,64 @@ include flags.mk
 I = include
 
 # compilation
-CXXFLAGS += -I$I -I.
+CXXFLAGS += -I$I
 
 # dirs
 O = obj
 B = bin
+D = doc
+T = tests
 
 # build products
-OBJ = $O/run_ext_test.o
-BIN = $B/run_ext_test.x
+OBJ = $O/simple.o
+BIN = $B/simple.x
+TOBJ = $O/simple_test.o
+TBIN = $B/simple_test.x
 
 ####
 
+# default target: the simple example
 all : $(BIN)
 
 $(BIN) : $O $B $(OBJ)
 	$(CXX) $(LDFLAGS) $(BLAS_LDFLAGS) \
 		$(OBJ) $(LDLIBS) $(BLAS_LDLIBS) -o $@
 
+$(TBIN) : $O $B $(TOBJ)
+	$(CXX) $(LDFLAGS) $(BLAS_LDFLAGS) \
+		$(TOBJ) $(LDLIBS) $(BLAS_LDLIBS) -o $@
+
 $O/%.o : example/%.cpp $I/*.hpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -DENABLE_CONSISTENCY_CHECK -c $< -o $@
 
-$O :
-	mkdir -p $O
+$O/%.o : $T/%.cpp $I/*.hpp $T/*.hpp
+	$(CXX) $(CXXFLAGS) -I$T \
+		-DUSE_MPI_WTIME -DENABLE_CONSISTENCY_CHECK -c $< -o $@
 
-$B :
-	mkdir -p $B
+## compile the test; display run hint
+.PHONY : test
+test : $(TBIN)
+	@echo
+	@echo "Now, $(TBIN) must be run with a sufficient number of threads"
+	@echo "to accommodate the following process grid:"
+	@grep ^#define tests/simple_test_setup.hpp | grep NP[RC]
+	@echo
 
+## docs
+.PHONY : $D
+$D :
+	doxygen doxygen.conf
+
+## cleanup
 .PHONY : clean
 clean :
 	rm -rf $O
-
 .PHONY : distclean
 distclean :
-	rm -rf $O $B
+	rm -rf $O $B $D
+
+## paths for build products
+$O :
+	mkdir -p $O
+$B :
+	mkdir -p $B
