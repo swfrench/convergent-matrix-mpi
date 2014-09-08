@@ -1,6 +1,6 @@
 #include <cstdio>
 
-#include "cm_mpi.hpp"
+#include "convergent_matrix_mpi.hpp"
 
 // global matrix dimensions
 #define M 2000

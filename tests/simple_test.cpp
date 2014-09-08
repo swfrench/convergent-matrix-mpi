@@ -4,7 +4,7 @@
 
 #include <mpi.h>
 
-#include "cm_mpi.hpp"
+#include "convergent_matrix_mpi.hpp"
 
 // the test configuration
 #include "simple_test_setup.hpp"
