@@ -1,6 +1,18 @@
+/**
+ * \mainpage ConvergentMatrixMPI
+ *
+ * MPI-based alternative implementation of `ConvergentMatrix` - a distributed
+ * dense matrix data structure (the latter based in UPC++, a set of PGAS
+ * extensions to the C++ language).
+ *
+ * In lieu of the combination of remote memory management, one-sided bulk copy,
+ * and asynchronous remote task execution employed by `ConvergentMatrix`, here
+ * we achieve the same functionality using MPI-3 RMA - namely, `MPI_Accumulate`
+ * with passive-target locking.
+ */
+
 #pragma once
 
-#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -25,7 +37,12 @@
 #define DEFAULT_BIN_FLUSH_THRESHOLD 10000
 #endif
 
+/**
+ * Contains classes associated with the convergent-matrix abstraction
+ */
 namespace cm {
+
+  /// @cond INTERNAL_DOCS
 
   /**
    * Wrapper for \c std::rand() for use in \c std::random_shuffle() (called in
@@ -56,6 +73,8 @@ namespace cm {
     std::random_shuffle( xs, xs + n, rgen );
   }
 
+  /// @endcond
+
   /**
    * MPI-based convergent matrix abstraction
    * \tparam T Matrix data type (e.g. float)
@@ -81,11 +100,13 @@ namespace cm {
     int _bin_flush_threshold;
     int *_bin_flush_order;
     T *_local_ptr;
-    std::vector<Bin<T> *> _bins;
+    Bin<T> **_update_bins;
 #ifdef ENABLE_CONSISTENCY_CHECK
     bool _consistency_mode;
     LocalMatrix<T> * _update_record;
 #endif
+    MPI_Win _target_window;
+    MPI_Datatype _mpi_data_type;
 
     inline void
     flush( int thresh = 0 )
@@ -93,8 +114,8 @@ namespace cm {
       // flush the bins
       for ( int b = 0; b < _mpi_size; b++ ) {
         int tid = _bin_flush_order[b];
-        if ( _bins[tid]->size() > thresh )
-          _bins[tid]->flush();
+        if ( _update_bins[tid]->size() > thresh )
+          _update_bins[tid]->flush();
       }
     }
 
@@ -117,19 +138,12 @@ namespace cm {
       return m_local;
     }
 
-    inline
-    int get_mpi_base_type()
-    {
-      return infer_mpi_type( _local_ptr );
-    }
-
 #ifdef ENABLE_CONSISTENCY_CHECK
 
     inline void
     sum_updates( T *updates, T *summed_updates )
     {
-      int base_dtype = get_mpi_base_type();
-      MPI_Allreduce( updates, summed_updates, _m * _n, base_dtype, MPI_SUM,
+      MPI_Allreduce( updates, summed_updates, _m * _n, _mpi_data_type, MPI_SUM,
                      MPI_COMM_WORLD );
     }
 
@@ -219,20 +233,22 @@ namespace cm {
 #else
       MPI_Alloc_mem( LLD * _n_local * sizeof(T), MPI_INFO_NULL, &_local_ptr );
 #endif
-      for ( long ij = 0; ij < LLD * _n_local; ij++ )
-        _local_ptr[ij] = (T) 0;
+      std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
 
       // set flush threashold for bins
       _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
 
+      // infer mpi datatype of T (using infer_mpi_type() from bin_mpi.hpp)
+      _mpi_data_type = infer_mpi_type( _local_ptr );
+
       // initialize window
-      MPI_Win target_window;
       MPI_Win_create( _local_ptr, LLD * _n_local * sizeof(T), sizeof(T),
-                      MPI_INFO_NULL, MPI_COMM_WORLD, &target_window );
+                      MPI_INFO_NULL, MPI_COMM_WORLD, &_target_window );
 
       // set up bins
+      _update_bins = new Bin<T> * [_mpi_size];
       for ( int tid = 0; tid < _mpi_size; tid++ )
-        _bins.push_back( new Bin<T>( tid, target_window ) );
+        _update_bins[tid] = new Bin<T>( tid, _target_window );
       MPI_Barrier( MPI_COMM_WORLD );
 
       // set up random flushing order
@@ -248,21 +264,57 @@ namespace cm {
 #endif
     }
 
+    /**
+     * Destructor for \c ConvergentMatrix
+     *
+     * On destruction, will:
+     * - Free storage associated with update bins
+     * - Free storage associated with the distributed matrix
+     */
     ~ConvergentMatrix()
     {
+      // clean up bins
       for ( int tid = 0; tid < _mpi_size; tid++ )
-        delete _bins[tid];
+        delete _update_bins[tid];
+      delete [] _update_bins;
       delete [] _bin_flush_order;
+
+      // free local storage
+#ifdef NO_MPI_ALLOC_MEM
+      delete [] _local_ptr;
+#else
+      MPI_Free_mem( _local_ptr );
+#endif
     }
 
     /**
-     * Get a raw pointer to the local distributed matrix storage (can be
-     * passed to, for example, PBLAS routines).
+     * Get a raw pointer to the local distributed matrix storage (can be passed
+     * to, for example, PBLAS routines).
+     *
+     * \b Note: The underlying storage _will_ be freed in the
+     * \c ConvergentMatrix destructor - for a persistent copy, see
+     * \c get_local_data_copy().
      */
     inline T *
-    get_local_data()
+    get_local_data() const
     {
       return _local_ptr;
+    }
+
+    /**
+     * Get a point to a _copy_ of the local distributed matrix storage (can be
+     * passed to, for example, PBLAS routines).
+     *
+     * \b Note: The underlying storage will _not_ be freed in the
+     * \c ConvergentMatrix destructor, in contrast to that from
+     * \c get_local_data().
+     */
+    inline T *
+    get_local_data_copy() const
+    {
+      T * copy_ptr = new T[LLD * _n_local];
+      std::copy( _local_ptr, _local_ptr + LLD * _n_local, copy_ptr );
+      return copy_ptr;
     }
 
     /**
@@ -273,9 +325,12 @@ namespace cm {
     inline void
     reset()
     {
+      // synchronize and ensure all updates from previous phase have completed
+      commit();
+
       // zero local storage
-      for ( long ij = 0; ij < LLD * _n_local; ij++ )
-        _local_ptr[ij] = (T) 0;
+      std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
+
 #ifdef ENABLE_CONSISTENCY_CHECK
       // reset consistency check ground truth as well
       if ( _consistency_mode )
@@ -362,6 +417,34 @@ namespace cm {
     }
 
     /**
+     * Remote random access (read only) to distributed matrix elements
+     * \param ix Leading dimension index
+     * \param jx Trailing dimension index
+     */
+    inline T
+    operator()( long ix, long jx )
+    {
+      // infer thread id and linear index
+      int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
+      long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
+                        ( ix / ( MB * NPROW ) ) * MB + ix % MB;
+      // should be safe to use either locking construct (only other Gets and
+      // Accumulates potentially happening at the same time, with the latter
+      // being atompic w.r.t. the target element)
+#ifdef USE_MPI_LOCK_SHARED
+      MPI_Win_lock( MPI_LOCK_SHARED, tid, 0, _target_window );
+#else
+      MPI_Win_lock( MPI_LOCK_EXCLUSIVE, tid, 0, _target_window );
+#endif
+      T elem;
+      MPI_Get( &elem,   1, _mpi_data_type,
+               tid, ij, 1, _mpi_data_type,
+               _target_window );
+      MPI_Win_unlock( tid, _target_window );
+      return elem;
+    }
+
+    /**
      * Distributed matrix update: general case
      * \param Mat The update (strided) slice
      * \param ix Maps slice into distributed matrix (leading dimension)
@@ -377,7 +460,7 @@ namespace cm {
         for ( long i = 0; i < Mat->m(); i++ ) {
           int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
           long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
-          _bins[tid]->append( (*Mat)( i, j ), ij );
+          _update_bins[tid]->append( (*Mat)( i, j ), ij );
         }
       }
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -411,7 +494,7 @@ namespace cm {
           if ( ix[i] <= ix[j] ) {
             int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
             long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
-            _bins[tid]->append( (*Mat)( i, j ), ij );
+            _update_bins[tid]->append( (*Mat)( i, j ), ij );
           }
       }
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -511,7 +594,7 @@ namespace cm {
           distribs[] = { MPI_DISTRIBUTE_CYCLIC, MPI_DISTRIBUTE_CYCLIC },
           dargs[]    = { MB, NB },
           psizes[]   = { NPROW, NPCOL },
-          base_dtype = get_mpi_base_type();
+          base_dtype = _mpi_data_type;
       MPI_Type_create_darray( NPCOL * NPROW, mpi_rank, 2,
                               gsizes, distribs, dargs, psizes,
                               MPI_ORDER_FORTRAN,

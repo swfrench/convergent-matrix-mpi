@@ -100,7 +100,7 @@ run()
   long **ixs;    // update indexing
   real_t *data;  // update data (reused for each round, though indexing varies)
 
-  // get rank 
+  // get rank
   MPI_Comm_rank( MPI_COMM_WORLD, &rank );
 
   // timing info for various stages
@@ -157,6 +157,10 @@ run()
   // display local leading entry
   printf( "Rank %4i | local_data[0] = %f\n",
           rank, local_data[0] );
+
+  // do random read on (0,0), display result
+  printf( "Rank %4i | dist_mat(0,0) = %f\n",
+          rank, dist_mat(0,0) );
 
   //// try remote random access read
   //printf( "Rank %4i | dist_mat( 64, 64 ) = %f\n",
