@@ -7,8 +7,8 @@
  *
  * In lieu of the combination of remote memory management, one-sided bulk copy,
  * and asynchronous remote task execution employed by `ConvergentMatrix`, here
- * we achieve the same functionality using MPI-3 RMA - namely, `MPI_Accumulate`
- * with passive-target locking.
+ * we achieve the same functionality using MPI-3 RMA operations - namely,
+ * `MPI_Accumulate` with passive-target locking.
  */
 
 #pragma once
@@ -93,21 +93,88 @@ namespace cm {
 
    private:
 
+    // matrix dimension and process grid
     long _m, _n;
-    long _myrow, _mycol;
     long _m_local, _n_local;
+    long _myrow, _mycol;
+
+    // misc. MPI
     int _mpi_rank, _mpi_size;
+    MPI_Datatype _mpi_data_type;
+
+    // update binning / application
     int _bin_flush_threshold;
     int *_bin_flush_order;
-    T *_local_ptr;
     Bin<T> **_update_bins;
+
+    // distributed storage and RMA windows
+    T *_local_ptr;
+    MPI_Win _target_window;
+
+    // replicated consistency checks
 #ifdef ENABLE_CONSISTENCY_CHECK
     bool _consistency_mode;
     LocalMatrix<T> * _update_record;
 #endif
-    MPI_Win _target_window;
-    MPI_Datatype _mpi_data_type;
 
+    // *********************
+    // ** private methods **
+    // *********************
+
+    // initialize distributed storage arrays and MPI RMA windows
+    inline void
+    init_arrays_and_windows()
+    {
+      // allocate storage and initialize the RMA window, potentially using
+      // different allocation strategies; the default strategy is via
+      // MPI_Alloc_mem
+#ifdef USE_MPI_WIN_ALLOCATE
+      // - use MPI_Win_allocate to initialize a window and allocate potentially
+      //   RMA-optimal memory in a single operation
+      MPI_Win_allocate( LLD * _n_local * sizeof(T), sizeof(T),
+                        MPI_INFO_NULL, MPI_COMM_WORLD,
+                        &_local_ptr, &_target_window );
+#else // else: USE_MPI_WIN_ALLOCATE
+      // for either of these strategies, manual initialization of the RMA
+      // window will be necessary
+#ifdef USE_STANDARD_ALLOCATOR
+      // - using plain old `new`
+      _local_ptr = new T[LLD * _n_local];
+#else
+      // - using MPI_Alloc_mem, which should hopefully have similar performance
+      //   characteristics as MPI_Win_allocate (but maybe not)
+      MPI_Alloc_mem( LLD * _n_local * sizeof(T), MPI_INFO_NULL, &_local_ptr );
+#endif // end: USE_STANDARD_ALLOCATOR
+      // initialize window
+      MPI_Win_create( _local_ptr, LLD * _n_local * sizeof(T), sizeof(T),
+                      MPI_INFO_NULL, MPI_COMM_WORLD, &_target_window );
+#endif // end: USE_MPI_WIN_ALLOCATE
+
+      // infer mpi datatype of T (using infer_mpi_type() from bin_mpi.hpp)
+      _mpi_data_type = infer_mpi_type( _local_ptr );
+
+      // zero storage
+      std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
+    }
+
+    // initialize update bins
+    inline void
+    init_bins()
+    {
+      // set up bins
+      _update_bins = new Bin<T> * [_mpi_size];
+      for ( int tid = 0; tid < _mpi_size; tid++ )
+        _update_bins[tid] = new Bin<T>( tid, _target_window );
+      MPI_Barrier( MPI_COMM_WORLD );
+
+      // set up random flushing order
+      _bin_flush_order = new int [_mpi_size];
+      for ( int tid = 0; tid < _mpi_size; tid++ )
+        _bin_flush_order[tid] = tid;
+      permute( _bin_flush_order, _mpi_size );
+    }
+
+    // flush bins that are "full" (exceed the current threshold)
     inline void
     flush( int thresh = 0 )
     {
@@ -119,6 +186,8 @@ namespace cm {
       }
     }
 
+    // determine lower bound on local storage for a given block-cyclic
+    // distribution
     inline long
     roc( long m,   // matrix dimension
          long np,  // dimension of the process grid
@@ -186,13 +255,18 @@ namespace cm {
 
    public:
 
+    // ********************
+    // ** public methods **
+    // ********************
+
     /**
      * The ConvergentMatrix distributed matrix abstraction.
      * \param m Global leading dimension
      * \param n Global trailing dimension
      */
     ConvergentMatrix( long m, long n ) :
-      _m(m), _n(n)
+      _m(m), _n(n),
+      _bin_flush_threshold(DEFAULT_BIN_FLUSH_THRESHOLD)
     {
       int mpi_init;
 
@@ -222,40 +296,14 @@ namespace cm {
       assert( _m_local > 0 );
       assert( _n_local > 0 );
 
-      // allocate local storage, set up windows and bins
-
       // check minimum local leading dimension
       assert( _m_local <= LLD );
 
-      // allocate and zero storage
-#ifdef NO_MPI_ALLOC_MEM
-      _local_ptr = new T[LLD * _n_local];
-#else
-      MPI_Alloc_mem( LLD * _n_local * sizeof(T), MPI_INFO_NULL, &_local_ptr );
-#endif
-      std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
+      // initialize distributed storage and MPI RMA windows
+      init_arrays_and_windows();
 
-      // set flush threashold for bins
-      _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
-
-      // infer mpi datatype of T (using infer_mpi_type() from bin_mpi.hpp)
-      _mpi_data_type = infer_mpi_type( _local_ptr );
-
-      // initialize window
-      MPI_Win_create( _local_ptr, LLD * _n_local * sizeof(T), sizeof(T),
-                      MPI_INFO_NULL, MPI_COMM_WORLD, &_target_window );
-
-      // set up bins
-      _update_bins = new Bin<T> * [_mpi_size];
-      for ( int tid = 0; tid < _mpi_size; tid++ )
-        _update_bins[tid] = new Bin<T>( tid, _target_window );
-      MPI_Barrier( MPI_COMM_WORLD );
-
-      // set up random flushing order
-      _bin_flush_order = new int [_mpi_size];
-      for ( int tid = 0; tid < _mpi_size; tid++ )
-        _bin_flush_order[tid] = tid;
-      permute( _bin_flush_order, _mpi_size );
+      // initialize update bins
+      init_bins();
 
       // consistency check is off by default
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -279,12 +327,18 @@ namespace cm {
       delete [] _update_bins;
       delete [] _bin_flush_order;
 
-      // free local storage
-#ifdef NO_MPI_ALLOC_MEM
+      // free local storage RMA window
+#ifndef USE_MPI_WIN_ALLOCATE
+#ifdef  USE_STANDARD_ALLOCATOR
       delete [] _local_ptr;
 #else
+      // only if MPI_Alloc_mem (default allocator) was used
       MPI_Free_mem( _local_ptr );
 #endif
+#endif
+      // window is freed in all cases (internally freeing storage if
+      // initialized via MPI_Win_allocate)
+      MPI_Win_free( &_target_window );
     }
 
     /**
