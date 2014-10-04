@@ -327,6 +327,11 @@ namespace cm {
       delete [] _update_bins;
       delete [] _bin_flush_order;
 
+      // window is freed in all cases (internally freeing storage if
+      // initialized via MPI_Win_allocate), only after which can the underlying
+      // memory buffer be freed
+      MPI_Win_free( &_target_window );
+
       // free local storage RMA window
 #ifndef USE_MPI_WIN_ALLOCATE
 #ifdef  USE_STANDARD_ALLOCATOR
@@ -336,9 +341,6 @@ namespace cm {
       MPI_Free_mem( _local_ptr );
 #endif
 #endif
-      // window is freed in all cases (internally freeing storage if
-      // initialized via MPI_Win_allocate)
-      MPI_Win_free( &_target_window );
     }
 
     /**
