@@ -155,6 +155,9 @@ namespace cm {
 
       // zero storage
       std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
+#ifdef USE_MPI_LOCK_ALL
+      MPI_Win_lock_all(0, _target_window);
+#endif // USE_MPI_LOCK_ALL
     }
 
     // initialize update bins
@@ -327,6 +330,10 @@ namespace cm {
       delete [] _update_bins;
       delete [] _bin_flush_order;
 
+#ifdef USE_MPI_LOCK_ALL
+      MPI_Win_unlock_all(_target_window);
+#endif // USE_MPI_LOCK_ALL
+
       // window is freed in all cases (internally freeing storage if
       // initialized via MPI_Win_allocate), only after which can the underlying
       // memory buffer be freed
@@ -487,16 +494,22 @@ namespace cm {
       // should be safe to use either locking construct (only other Gets and
       // Accumulates potentially happening at the same time, with the latter
       // being atompic w.r.t. the target element)
-#ifdef USE_MPI_LOCK_SHARED
+#ifndef USE_MPI_LOCK_ALL
+# ifdef USE_MPI_LOCK_SHARED
       MPI_Win_lock( MPI_LOCK_SHARED, tid, 0, _target_window );
-#else
+# else  // USE_MPI_LOCK_SHARED
       MPI_Win_lock( MPI_LOCK_EXCLUSIVE, tid, 0, _target_window );
-#endif
+# endif // USE_MPI_LOCK_SHARED
+#endif // USE_MPI_LOCK_ALL
       T elem;
       MPI_Get( &elem,   1, _mpi_data_type,
                tid, ij, 1, _mpi_data_type,
                _target_window );
+#ifdef USE_MPI_LOCK_ALL
+      MPI_Win_flush( tid, _target_window );
+#else // USE_MPI_LOCK_ALL
       MPI_Win_unlock( tid, _target_window );
+#endif // USE_MPI_LOCK_ALL
       return elem;
     }
 
