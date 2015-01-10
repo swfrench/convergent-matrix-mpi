@@ -93,14 +93,20 @@ namespace cm {
       MPI_Type_commit( &update_type );
 
       // acquire the shared lock, apply the update, unlock
-#ifdef USE_MPI_LOCK_SHARED
+#ifndef USE_MPI_LOCK_ALL
+# ifdef USE_MPI_LOCK_SHARED
       MPI_Win_lock( MPI_LOCK_SHARED, _target_rank, 0, _target_window );
-#else
+# else
       MPI_Win_lock( MPI_LOCK_EXCLUSIVE, _target_rank, 0, _target_window );
-#endif
+# endif
+#endif // USE_MPI_LOCK_ALL
       MPI_Accumulate( _update_data.data(), size(), _mpi_data_type,
                       _target_rank, 0, 1, update_type, MPI_SUM, _target_window );
+#ifdef USE_MPI_LOCK_ALL
+      MPI_Win_flush( _target_rank, _target_window );
+#else // USE_MPI_LOCK_ALL
       MPI_Win_unlock( _target_rank, _target_window );
+#endif // USE_MPI_LOCK_ALL
 
       // clean up after the derived type
       MPI_Type_free( &update_type );
