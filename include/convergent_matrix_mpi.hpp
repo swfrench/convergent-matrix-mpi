@@ -506,7 +506,7 @@ namespace cm {
                tid, ij, 1, _mpi_data_type,
                _target_window );
 #ifdef USE_MPI_LOCK_ALL
-      MPI_Win_flush( tid, _target_window );
+      MPI_Win_flush_local( tid, _target_window );
 #else // USE_MPI_LOCK_ALL
       MPI_Win_unlock( tid, _target_window );
 #endif // USE_MPI_LOCK_ALL
