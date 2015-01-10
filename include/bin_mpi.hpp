@@ -95,14 +95,16 @@ namespace cm {
       // acquire the shared lock, apply the update, unlock
 #ifndef USE_MPI_LOCK_ALL
 # ifdef USE_MPI_LOCK_SHARED
-      MPI_Win_lock( MPI_LOCK_SHARED, _target_rank, 0, _target_window );
+      MPI_Win_lock( MPI_LOCK_SHARED, _target_rank, LOCK_ASSERT, _target_window );
 # else
-      MPI_Win_lock( MPI_LOCK_EXCLUSIVE, _target_rank, 0, _target_window );
+      MPI_Win_lock( MPI_LOCK_EXCLUSIVE, _target_rank, LOCK_ASSERT, _target_window );
 # endif
 #endif // USE_MPI_LOCK_ALL
       MPI_Accumulate( _update_data.data(), size(), _mpi_data_type,
                       _target_rank, 0, 1, update_type, MPI_SUM, _target_window );
 #ifdef USE_MPI_LOCK_ALL
+      // This enforces remote completion.  It may be prudent to use only local
+      // completion and enforce remote completion elsewhere using MPI_Win_flush_all.
       MPI_Win_flush( _target_rank, _target_window );
 #else // USE_MPI_LOCK_ALL
       MPI_Win_unlock( _target_rank, _target_window );

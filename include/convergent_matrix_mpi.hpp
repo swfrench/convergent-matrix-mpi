@@ -26,6 +26,12 @@
 
 #include <mpi.h>
 
+#ifdef CHECK_RMA_LOCKS
+#define LOCK_ASSERT 0
+#else // CHECK_RMA_LOCKS
+#define LOCK_ASSERT MPI_MODE_NOCHECK
+#endif // CHECK_RMA_LOCKS
+
 // LocalMatrix<T>
 #include "local_matrix.hpp"
 
@@ -156,7 +162,7 @@ namespace cm {
       // zero storage
       std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
 #ifdef USE_MPI_LOCK_ALL
-      MPI_Win_lock_all(0, _target_window);
+      MPI_Win_lock_all(LOCK_ASSERT, _target_window);
 #endif // USE_MPI_LOCK_ALL
     }
 
@@ -496,9 +502,9 @@ namespace cm {
       // being atompic w.r.t. the target element)
 #ifndef USE_MPI_LOCK_ALL
 # ifdef USE_MPI_LOCK_SHARED
-      MPI_Win_lock( MPI_LOCK_SHARED, tid, 0, _target_window );
+      MPI_Win_lock( MPI_LOCK_SHARED, tid, LOCK_ASSERT, _target_window );
 # else  // USE_MPI_LOCK_SHARED
-      MPI_Win_lock( MPI_LOCK_EXCLUSIVE, tid, 0, _target_window );
+      MPI_Win_lock( MPI_LOCK_EXCLUSIVE, tid, LOCK_ASSERT, _target_window );
 # endif // USE_MPI_LOCK_SHARED
 #endif // USE_MPI_LOCK_ALL
       T elem;
