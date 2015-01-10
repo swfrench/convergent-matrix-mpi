@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef NOCHECK
+#include <cassert>
+#endif
+
 #include <vector>
 #include <mpi.h>
 
@@ -86,7 +90,11 @@ namespace cm {
       displacement = new int [size()];
       for ( long i = 0; i < size(); i++ ) {
         blocksize[i] = 1;
-        displacement[i] = _update_ijs[i];
+        displacement[i] = static_cast<int>(_update_ijs[i]);
+#ifndef NOCHECK
+        // This is one way to determine if long->int suffered from truncation.
+        assert( static_cast<long>(displacement[i]) == _update_ijs[i] );
+#endif
       }
       MPI_Type_indexed( size(), blocksize, displacement, _mpi_data_type,
                         &update_type );
