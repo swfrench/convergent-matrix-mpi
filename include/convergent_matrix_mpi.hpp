@@ -287,6 +287,12 @@ namespace cm {
       assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
       assert( mpi_init );
 
+      // make sure the locking mechanism matches LOCK_ASSERT (i.e. we are using
+      // shared-mode locks throughout if LOCK_ASSERT is MPI_MODE_NOCHECK)
+#if ! ( defined(USE_MPI_LOCK_SHARED) || defined(USE_MPI_LOCK_ALL) )
+      assert( LOCK_ASSERT == 0 );
+#endif // ! ( defined(USE_MPI_LOCK_SHARED) || defined(USE_MPI_LOCK_ALL) )
+
       // get process pool config
       MPI_Comm_rank( MPI_COMM_WORLD, &_mpi_rank );
       MPI_Comm_size( MPI_COMM_WORLD, &_mpi_size );
